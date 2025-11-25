@@ -283,16 +283,20 @@ def c_backtest_core(dict agent_dict, int print_progress=0):
         wfa_dts_int = np.array(wfa_dts).astype('datetime64[ns]').astype('int64')
 
     ### Initialize backtest stuff
-    default_order = dict(position_cnt = 0, symbol_idx = 0, position_id = 0, base = 0, invalid = 'NO', cancel = 0, tag = '')
+    default_order = dict(position_cnt = 0, symbol_idx = 0, position_id = 0, order_id = 0, base = 0, tag = '', invalid = 'NO', cancel = 0)
     symbols = str(agent_dict['general']['SYMBOLS']).split(",")
     n_symbols_range = np.arange(len(symbols), dtype=np.int32)
     orders_info_list = []
+    pending_orders = [[] for _ in n_symbols_range]
     cur_positions = dict()  # dict of dict
     position_cnt = -1
     slippages = np.array([float(symbols_info[sidx]['SLIPPAGE']) for sidx in n_symbols_range], dtype=np.float64)
     min_quotes = np.array([float(symbols_info[sidx]['MIN_QUOTE']) for sidx in n_symbols_range], dtype=np.float64)
     min_bases = np.array([float(symbols_info[sidx]['MIN_BASE']) for sidx in n_symbols_range], dtype=np.float64)
     base_steps = np.array([float(symbols_info[sidx]['BASE_STEP']) for sidx in n_symbols_range], dtype=np.float64)
+    date_ints = np.zeros(len(n_symbols_range), dtype=np.int64)
+    asks = np.zeros(len(n_symbols_range), dtype=np.float64)
+    bids = np.zeros(len(n_symbols_range), dtype=np.float64)
 
     ### Load df_set
     if 'df_sets' in agent_dict.keys():
@@ -327,6 +331,33 @@ def c_backtest_core(dict agent_dict, int print_progress=0):
         cur_sidx, cur_date_int, bid, ask = tick_gen.get_tick()
         kidx_tracker.update_kidx(cur_sidx, cur_date_int)
 
+        # Update latest_date, latest_ask, latest_bid
+        date_ints[cur_sidx] = cur_date_int
+        asks[cur_sidx] = ask
+        bids[cur_sidx] = bid
+
+        # Process pending orders for current symbol
+        if pending_orders[cur_sidx]:
+            for order in pending_orders[cur_sidx]:
+                # Check market order valid
+                open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, cur_sidx, bid, ask, min_quotes[cur_sidx], min_bases[cur_sidx], base_steps[cur_sidx], cur_date_int)
+
+                # Calculate slippage
+                slippage = slippages[cur_sidx] if side else -slippages[cur_sidx]
+                open_price = open_price * (1 + slippage)
+
+                # Update info
+                order.update({'exec_price': open_price, 'exec_date': cur_date_int})
+
+                # Update position
+                order, cur_positions, position_cnt, cur_base_balance = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int)
+
+                # Append to order_info_list
+                orders_info_list.append(order)
+            
+            # Clear pending orders for this symbol
+            pending_orders[cur_sidx] = []
+
         # wfa Update paras
         if has_wfa:
             if cur_wfa_date_idx < wfa_dts_len-1:
@@ -353,32 +384,72 @@ def c_backtest_core(dict agent_dict, int print_progress=0):
         eq_tracker.update_balance(cur_balance, cur_date_int)
 
         # agent on_tick action
-        new_orders, cancel_order_ids = agent.on_tick(cur_sidx, cur_date_int, bid, ask, kidx_tracker.kidx_sets_out, kidx_tracker.kidx_changed_flags, [], cur_positions, cur_balance)
+        new_orders, cancel_order_ids = agent.on_tick(cur_sidx, cur_date_int, bid, ask, kidx_tracker.kidx_sets_out, kidx_tracker.kidx_changed_flags, pending_orders, cur_positions, cur_balance)
+
+        # Cancel orders from pending_orders
+        for sidx in n_symbols_range:
+            symbol_orders = pending_orders[sidx]
+            cancel_orders = [porder for porder in symbol_orders if porder['order_id'] in cancel_order_ids]
+            for cancel_order in cancel_orders:
+                cancel_order['cancel'] = 1
+                cancel_order['exec_date'] = cur_date_int
+                orders_info_list.append(cancel_order)
+            pending_orders[sidx] = [porder for porder in symbol_orders if porder['order_id'] not in cancel_order_ids]
 
         # Process new orders (only market orders now)
         new_orders = [{**default_order, **norder} for norder in new_orders]
         for order in new_orders:
             order_sidx = order['symbol_idx']
             
-            # Check market order valid
-            open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, order_sidx, bid, ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
+            # If order is for current symbol, execute immediately
+            if order_sidx == cur_sidx:
+                # Check market order valid
+                open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, order_sidx, bid, ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
 
-            # Calculate slippage
-            slippage = slippages[order_sidx] if side else -slippages[order_sidx]
-            open_price = open_price * (1 + slippage)
+                # Calculate slippage
+                slippage = slippages[order_sidx] if side else -slippages[order_sidx]
+                open_price = open_price * (1 + slippage)
 
-            # Update info
-            order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
+                # Update info
+                order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
 
-            # Update position
-            order, cur_positions, position_cnt, cur_base_balance = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int)
+                # Update position
+                order, cur_positions, position_cnt, cur_base_balance = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int)
 
-            # Append to order_info_list
-            orders_info_list.append(order)
+                # Append to order_info_list
+                orders_info_list.append(order)
+            
+            # If order is for different symbol
+            else:
+                # If that symbol has appeared in this tick cycle, execute with its last price
+                if cur_date_int == date_ints[order_sidx]:
+                    true_bid = bids[order_sidx]
+                    true_ask = asks[order_sidx]
+                    
+                    # Check market order valid
+                    open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, order_sidx, true_bid, true_ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
+
+                    # Calculate slippage
+                    slippage = slippages[order_sidx] if side else -slippages[order_sidx]
+                    open_price = open_price * (1 + slippage)
+
+                    # Update info
+                    order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
+
+                    # Update position
+                    order, cur_positions, position_cnt, cur_base_balance = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, true_ask, true_bid, slippage, cur_date_int)
+
+                    # Append to order_info_list
+                    orders_info_list.append(order)
+                
+                # Otherwise, add to pending orders to execute when that symbol's tick arrives
+                else:
+                    order['pending_date'] = cur_date_int
+                    pending_orders[order_sidx].append(order)
 
     ### handle orders_info
     orders_info = pd.DataFrame(orders_info_list,
-                               columns=['position_cnt', 'symbol_idx', 'position_id', 'base', 'tag', 'invalid', 'cancel',
+                               columns=['position_cnt', 'symbol_idx', 'position_id', 'order_id', 'base', 'tag', 'invalid', 'cancel',
                                         'pending_date', 'exec_price', 'exec_date', 'exec_base', 'trade_fee',
                                         'spread_fee', 'slippage_fee', 'swap_fee', 'pnl', 'mfe', 'mae']
                                )

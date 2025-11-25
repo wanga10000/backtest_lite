@@ -274,15 +274,15 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
     # 參數說明：
     # cur_sidx: 當前品種索引
     # cur_date_int: 當前時間（整數格式）
-    # bid, ask: 當前買賣價
+    # bid, ask: 當前品種的買賣價
     # kidx_sets: 各品種各時間框架的K線索引
     # kidx_changed_flags: 各時間框架是否更新
-    # pending_orders: 空列表
-    # cur_positions: 當前持倉 ({pos_id: base})
+    # pending_orders: 待執行訂單列表（用於跨品種訂單，通常不需直接操作）
+    # cur_positions: 當前持倉 ({pos_id: position_info})
     # cur_balance: 當前餘額
     
     new_orders = []        # 新訂單列表（僅市價單）
-    cancel_order_ids = []  # 已棄用
+    cancel_order_ids = []  # 待取消的訂單ID列表（用於取消pending_orders中的訂單）
     
     # 策略邏輯實現
     # ...
@@ -290,7 +290,7 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
     return new_orders, cancel_order_ids
 ```
 
-#### 2.3 訂單格式（lite版本 簡化版）
+#### 2.3 訂單格式
 
 **基本訂單格式**（僅支援市價單）：
 ```python
@@ -303,9 +303,14 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
 ```
 
 **注意事項**：
-- lite 版本已移除限價單、觸發單和OCO機制
-- 所有訂單都是市價單，會立即執行，或pend到該市場open
-- `cancel_order_ids` 返回值已無作用
+- lite 版本僅支援市價單，所有訂單會立即執行（或等待該品種tick到來時執行）
+- 已移除限價單、觸發單和OCO機制
+
+**跨品種訂單處理**：
+- 如果訂單的 `symbol_idx` = 當前tick品種：立即執行
+- 如果訂單的 `symbol_idx` ≠ 當前tick品種：
+  - 若該品種在本輪tick已出現過：使用該品種最後的價格立即執行
+  - 若該品種在本輪tick未出現：加入 pending_orders，等待該品種tick到來時執行
 
 **開倉訂單範例**：
 ```python

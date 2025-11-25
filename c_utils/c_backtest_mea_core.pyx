@@ -26,21 +26,20 @@ def cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols
     if order['position_id'] in cur_positions.keys():
         # Check base is 0
         if order['base'] != 0:
-            raise ValueError(f"ERROR [{agent_name}][cur_positions_change]: Can't add base on current position {order['position_id']} for order {order['order_id']} at {cur_date_int}")
+            raise ValueError(f"ERROR [{agent_name}][cur_positions_change]: Can't add base on current position {order['position_id']} at {cur_date_int}")
 
         position_info = cur_positions.pop(order['position_id'])
 
         # Check sidx the same
         sidx = order['symbol_idx']
         if sidx != position_info['symbol_idx']:
-            raise ValueError(f"ERROR [{agent_name}][cur_positions_change]: Can't close current position {order['position_id']} by different symbol for order {order['order_id']} at {cur_date_int}")
+            raise ValueError(f"ERROR [{agent_name}][cur_positions_change]: Can't close current position {order['position_id']} by different symbol at {cur_date_int}")
 
         # Close fee calculate: 'trade_fee', 'spread_fee', 'slippage_fee'
         symbol_info = symbols_info[sidx]
         TRADE_FEE_TYPE = symbol_info['TRADE_FEE_TYPE']
-        order_type = order['order_type']
         base = -position_info['base']
-        trade_fee_rate = symbol_info['MAKER_FEE'] if order_type==1 else symbol_info['TAKER_FEE']
+        trade_fee_rate = symbol_info['TAKER_FEE']
         end_quote = abs(base) * order['exec_price']
         if TRADE_FEE_TYPE==0:
             trade_fee = end_quote * trade_fee_rate
@@ -161,9 +160,8 @@ def cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols
         # Open fee calculate: 'trade_fee', 'spread_fee', 'slippage_fee'
         symbol_info = symbols_info[order['symbol_idx']]
         TRADE_FEE_TYPE = symbol_info['TRADE_FEE_TYPE']
-        order_type = order['order_type']
         base = order['base']
-        trade_fee_rate = symbol_info['MAKER_FEE'] if order_type==1 else symbol_info['TAKER_FEE']
+        trade_fee_rate = symbol_info['TAKER_FEE']
         initial_quote = abs(base) * order['exec_price']
         if TRADE_FEE_TYPE==0:
             trade_fee = initial_quote * trade_fee_rate
@@ -201,16 +199,16 @@ def check_market_order_valid(agent_name, has_base_limit, cur_positions, order, s
     if not has_position:
         side = order['base']>0
         if base==0:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't add 0 base on not existed position {pos_id} for order {order['order_id']} at {cur_date_int}")
+            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't add 0 base on not existed position {pos_id} at {cur_date_int}")
 
     # Error 2 & 3
     else:
         pos_sidx = cur_positions[pos_id]['symbol_idx']
         side = cur_positions[pos_id]['base']<0
         if base!=0:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't add base on current position {pos_id} for order {order['order_id']} at {cur_date_int}")
+            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't add base on current position {pos_id} at {cur_date_int}")
         if sidx!=pos_sidx:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't close current position {pos_id} by different symbol for order {order['order_id']} at {cur_date_int}")
+            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't close current position {pos_id} by different symbol at {cur_date_int}")
 
     ### Check base valid for symbols_info rule
     open_price = ask if side else bid
@@ -218,91 +216,24 @@ def check_market_order_valid(agent_name, has_base_limit, cur_positions, order, s
         abs_base = abs(base)
         quote_value = abs_base * open_price
         if quote_value < min_quote:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Quote too small on order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
+            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Quote too small for position {order['position_id']} at {cur_date_int}")
 
         if abs_base < min_base:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Base too small on order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
+            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Base too small for position {order['position_id']} at {cur_date_int}")
 
         if base_step > 0:
             abs_base_dec = Decimal(str(round(abs_base, 7)))
             base_step_dec = Decimal(str(round(base_step, 7)))
             if abs_base_dec % base_step_dec != 0:
-                raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Base is not divisible on order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
+                raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Base is not divisible for position {order['position_id']} at {cur_date_int}")
 
     return open_price, side
 
 
-def check_pending_order_valid(agent_name, has_base_limit, cur_positions, symbol_orders, order, sidx, bid, ask, min_quote, min_base, base_step, cur_date_int):
-    # 1. Check base valid for cur_position
-    # 2. Check same pos id, same type already have order
-    # 3. Check price valid for limit/trigger order
-    # 4. Check base valid for symbols_info rule
-    pos_id = order['position_id']
-    has_position = pos_id in cur_positions.keys()
-    base = order['base']
-    price = order['price']
-    order_type = order['order_type']
-
-    ### Check base valid for cur_position
-    # Error 1
-    if not has_position:
-        side = order['base']>0
-        if base==0:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't add 0 base on not existed position {pos_id} for order {order['order_id']} at {cur_date_int}")
-
-    # Error 2 & 3
-    else:
-        pos_sidx = cur_positions[pos_id]['symbol_idx']
-        side = cur_positions[pos_id]['base']<0
-        if base!=0:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't add base on current position {pos_id} for order {order['order_id']} at {cur_date_int}")
-        if sidx!=pos_sidx:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Can't close current position {pos_id} by different symbol for order {order['order_id']} at {cur_date_int}")
-
-    ### Check same pos id, same type already have order
-    pending_keys = {(porder['position_id'], porder['order_type']) for porder in symbol_orders}
-    if (pos_id, order_type) in pending_keys:
-        raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Already have pending order with same pos_id {pos_id} and order_type {order_type} for order {order['order_id']} at {cur_date_int}")
-
-    ### Check price valid for limit/trigger order
-    if order_type == 1:
-        if ((side and price >= ask) or (not side and price <= bid)):
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Price not valid on limit order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
-
-    else:
-        if ((side and price <= ask) or (not side and price >= bid)):
-            print(f"{cur_positions}")
-            print(f"price: {price}, ask: {ask}, bid: {bid}, side: {side}")
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Price not valid on trigger order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
-
-    ### Check base valid for symbols_info rule
-    if has_base_limit and not has_position:
-        abs_base = abs(base)
-        quote_value = abs_base * price
-        if quote_value < min_quote:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Quote too small on order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
-
-        if abs_base < min_base:
-            raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Base too small on order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
-
-        if base_step > 0:
-            abs_base_dec = Decimal(str(round(abs_base, 7)))
-            base_step_dec = Decimal(str(round(base_step, 7)))
-            if abs_base_dec % base_step_dec != 0:
-                raise ValueError(f"ERROR [{agent_name}][check_order_valid]: Base is not divisible on order {order['order_id']} for position {order['position_id']} at {cur_date_int}")
-
-    return side
 
 
-cdef bint check_pending_order_touched(int order_type, double price, double bid, double ask, bint side):
-    if order_type == 1:
-        return ((side and price >= ask) or (not side and price <= bid))
 
-    else:
-        return ((side and price <= ask) or (not side and price >= bid))
-
-
-cdef tuple update_balance(dict cur_positions, double cur_base_balance, double ask, double bid, int cur_sidx, double cur_date_int, list mea_exurs_list, list mea_dates_list):
+cdef tuple update_balance(dict cur_positions, double cur_base_balance, double ask, double bid, int cur_sidx, np.int64_t cur_date_int, list mea_exurs_list, list mea_dates_list):
     cdef:
         double cur_balance = cur_base_balance
         double float_pnl
@@ -348,17 +279,10 @@ def c_backtest_mea_core(dict agent_dict, int print_progress=0):
         np.int64_t[:] wfa_dts_int
         np.int64_t cur_date_int
         int[:] n_symbols_range
-        double bid, true_bid
-        double ask, true_ask
-        np.int64_t[:] date_ints
-        double[:] asks
-        double[:] bids
+        double bid
+        double ask
         int position_cnt
-        int order_type
-        double price, price_ask, price_bid, est_spread
         bint side
-        bint is_exec, base_not_valid
-        bint has_position
         double open_price, slippage
 
         # Define c trading stuff
@@ -383,7 +307,6 @@ def c_backtest_mea_core(dict agent_dict, int print_progress=0):
         symbols_info[sidx].update({
         'TRADE_FEE_TYPE': int(symbol_info['TRADE_FEE_TYPE']),
         'TAKER_FEE': float(symbol_info['TAKER_FEE']) if agent_dict['backtest']['NO_COST']!=1 else 0,
-        'MAKER_FEE': float(symbol_info['MAKER_FEE']) if agent_dict['backtest']['NO_COST']!=1 else 0,
         'SPREAD_POS': int(symbol_info['SPREAD_POS']),
         'SWAP_TYPE': int(symbol_info['SWAP_TYPE']),
         'LONG_SWAP': float(symbol_info['LONG_SWAP']) if agent_dict['backtest']['NO_COST']!=1 else 0,
@@ -446,8 +369,7 @@ def c_backtest_mea_core(dict agent_dict, int print_progress=0):
         wfa_dts_int = np.array(wfa_dts).astype('datetime64[ns]').astype('int64')
 
     ### Initialize backtest stuff
-    default_order = dict(position_cnt = 0, symbol_idx = 0, position_id = 0, order_id = 0, order_type = 0, base = 0, price = 0,
-                         oco_orders = [], oco_cancel_ids = [], tag = '', invalid = 'NO', valid = 0, cancel = 0)
+    default_order = dict(position_cnt = 0, symbol_idx = 0, position_id = 0, order_id = 0, base = 0, tag = '', invalid = 'NO', cancel = 0)
     symbols = str(agent_dict['general']['SYMBOLS']).split(",")
     n_symbols_range = np.arange(len(symbols), dtype=np.int32)
     orders_info_list = []
@@ -532,241 +454,27 @@ def c_backtest_mea_core(dict agent_dict, int print_progress=0):
         asks[cur_sidx] = ask
         bids[cur_sidx] = bid
 
-        # Check pending_orders for current tick symbol
-        symbol_orders = pending_orders[cur_sidx]
-        if symbol_orders:
-            remove_oidx = []
-            for oidx, order in enumerate(symbol_orders):
-                if order['valid'] == 1:
-                    # For valid==0 order, don't need to consider in remove_oidx. Because in live, it is in new_orders buffer. OCO only check pending orders.
-                    if oidx not in remove_oidx:
-                        # Check if limit/trigger order is executed at current tick
-                        side = order['side']
-                        order_type = order['order_type']
-                        price = order['price']
-                        is_exec = check_pending_order_touched(order_type, price, bid, ask, side)
+        # Process pending orders for current symbol
+        if pending_orders[cur_sidx]:
+            for order in pending_orders[cur_sidx]:
+                # Check market order valid
+                open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, cur_sidx, bid, ask, min_quotes[cur_sidx], min_bases[cur_sidx], base_steps[cur_sidx], cur_date_int)
 
-                        if is_exec:
-                            remove_oidx.append(oidx)
+                # Calculate slippage
+                slippage = slippages[cur_sidx] if side else -slippages[cur_sidx]
+                open_price = open_price * (1 + slippage)
 
-                            # Calculate slippage
-                            if order_type==2:
-                                slippage = slippages[cur_sidx] if side else -slippages[cur_sidx]
-                                open_price = price * (1 + slippage)
-                            else:
-                                slippage = 0
-                                open_price = price
+                # Update info
+                order.update({'exec_price': open_price, 'exec_date': cur_date_int})
 
-                            # Update info
-                            order.update({'exec_price': open_price, 'exec_date': cur_date_int})
+                # Update position
+                order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
 
-                            # Update position
-                            order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
-
-                            # oco cancel
-                            if order['oco_cancel_ids']:
-                                order_oco_cancel_ids = order['oco_cancel_ids']
-
-                                # Remove from pending_order for this symbol and add to orders_info_list
-                                if any(porder['order_id'] in order_oco_cancel_ids for porder in symbol_orders):  # Fix zip error
-                                    cancel_orders, remove_pidx = zip(*[({**porder, 'exec_date': cur_date_int, 'cancel': 1}, pidx) \
-                                    for pidx, porder in enumerate(symbol_orders) if porder['order_id'] in order_oco_cancel_ids])
-                                    orders_info_list.extend(cancel_orders)
-                                    remove_oidx.extend(remove_pidx)
-
-                                # Remove from other symbol pending_order and add to orders_info_list
-                                for sidx in n_symbols_range:
-                                    if sidx!=cur_sidx:
-                                        ssymbol_orders = pending_orders[sidx]
-                                        cancel_orders = [{**porder, 'exec_date': cur_date_int, 'cancel': 1} \
-                                                          for porder in ssymbol_orders if porder['order_id'] in order_oco_cancel_ids]
-                                        orders_info_list.extend(cancel_orders)
-                                        pending_orders[sidx] = [porder for porder in ssymbol_orders if porder['order_id'] not in order_oco_cancel_ids]
-
-                            # oco add, need add oco_trigger price for those orders
-                            if order['oco_orders']:
-                                est_spread = ask - bid           # The spread here is estimated, not exact the actual spread.
-                                price_ask = open_price if side else price + est_spread
-                                price_bid = open_price - est_spread if side else price
-                                add_orders = order['oco_orders']
-                                add_orders = [{**aorder, 'oco_price_bid': price_bid, 'oco_price_ask': price_ask} for aorder in add_orders]
-                                new_orders.extend(add_orders)
-
-                            # Finally, append to order_info_list
-                            orders_info_list.append(order)
-
-                # For valid=0 order, add to new_orders
-                else:
-                    remove_oidx.append(oidx)
-                    new_orders.append(order)
-
-            # Delete orders from pending_orders for this symbols if executed or cancelled or valid=0
-            if remove_oidx:
-                pending_orders[cur_sidx] = [porder for pidx, porder in enumerate(symbol_orders) if pidx not in remove_oidx]
-
-            # New orders processing, reprocessing when it gets oco add orders or valid=0 orders
-            new_orders = [{**default_order, **norder} for norder in new_orders]
-            new_orders.sort(key=lambda x: x['order_type']) # Sort to prioritize market orders first
-            while new_orders:
-                order = new_orders.pop(0)
-
-                if order['symbol_idx']==cur_sidx:
-                    # For oco added orders, the market detected price is not newest price but the triggered price
-                    if 'oco_price_bid' in order.keys():
-                        true_bid = order['oco_price_bid']
-                        true_ask = order['oco_price_ask']
-                    else:
-                        true_bid = bid
-                        true_ask = ask
-
-                    # Process market
-                    if order['order_type']==0:
-                        # Check market order valid
-                        open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, cur_sidx, true_bid, true_ask, min_quotes[cur_sidx], min_bases[cur_sidx], base_steps[cur_sidx], cur_date_int)
-
-                        # Calculate slippage
-                        slippage = slippages[cur_sidx] if side else -slippages[cur_sidx]
-                        open_price = open_price * (1 + slippage)
-
-                        # Update info
-                        order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
-
-                        # Update position
-                        order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, true_ask, true_bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
-
-                        # oco cancel
-                        if order['oco_cancel_ids']:
-                            order_oco_cancel_ids = order['oco_cancel_ids']
-
-                            # Remove from pending_order and add to orders_info_list
-                            for sidx in n_symbols_range:
-                                symbol_orders = pending_orders[sidx]
-                                cancel_orders = [{**porder, 'exec_date': cur_date_int, 'cancel': 1} \
-                                                  for porder in symbol_orders if porder['order_id'] in order_oco_cancel_ids]
-                                orders_info_list.extend(cancel_orders)
-                                pending_orders[sidx] = [porder for porder in symbol_orders if porder['order_id'] not in order_oco_cancel_ids]
-
-                        # oco add
-                        if order['oco_orders']:
-                            add_orders = order['oco_orders']
-                            add_orders = [{**default_order, **aorder} for aorder in add_orders]
-                            new_orders.extend(add_orders)
-
-                        # Finally, append to order_info_list
-                        orders_info_list.append(order)
-
-                    # Process limit & trigger
-                    else:
-                        # Check pending order valid
-                        side = check_pending_order_valid(agent_name, has_base_limit, cur_positions, pending_orders[cur_sidx], order, cur_sidx, true_bid, true_ask, min_quotes[cur_sidx], min_bases[cur_sidx], base_steps[cur_sidx], cur_date_int)
-
-                        # Update info
-                        order.update({'pending_date': cur_date_int, 'valid': 1, 'side': side})
-
-                        # For oco added orders, need recheck pending trigger
-                        if 'oco_price_bid' in order.keys():
-                            # Check if limit/trigger order is executed at current tick
-                            order_type = order['order_type']
-                            price = order['price']
-                            is_exec = check_pending_order_touched(order_type, price, bid, ask, side)
-
-                            if is_exec:
-                                # Calculate slippage
-                                if order_type==2:
-                                    slippage = slippages[cur_sidx] if side else -slippages[cur_sidx]
-                                    open_price = price * (1 + slippage)
-                                else:
-                                    slippage = 0
-                                    open_price = price
-
-                                # Update info
-                                order.update({'exec_price': open_price, 'exec_date': cur_date_int})
-
-                                # Update position
-                                order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
-
-                                # oco cancel
-                                if order['oco_cancel_ids']:
-                                    order_oco_cancel_ids = order['oco_cancel_ids']
-
-                                    # Remove from pending_order and add to orders_info_list
-                                    for sidx in n_symbols_range:
-                                        symbol_orders = pending_orders[sidx]
-                                        cancel_orders = [{**porder, 'exec_date': cur_date_int, 'cancel': 1} \
-                                                          for porder in symbol_orders if porder['order_id'] in order_oco_cancel_ids]
-                                        orders_info_list.extend(cancel_orders)
-                                        pending_orders[sidx] = [porder for porder in symbol_orders if porder['order_id'] not in order_oco_cancel_ids]
-
-                                # oco add
-                                if order['oco_orders']:
-                                    add_orders = order['oco_orders']
-                                    add_orders = [{**default_order, **aorder} for aorder in add_orders]
-                                    new_orders.extend(add_orders)
-
-                                # Finally, append to order_info_list
-                                orders_info_list.append(order)
-                            else:
-                                # Append to pending_orders
-                                pending_orders[cur_sidx].append(order)
-
-                # For different symbol order, if previous date = cur_date_int, than open or pend with valid=1
-                # Else add to pending_orders with valid=0
-                else:
-                    order_sidx = order['symbol_idx']
-                    if cur_date_int==date_ints[order_sidx]:
-                        # Get info
-                        true_bid = bids[order_sidx]
-                        true_ask = asks[order_sidx]
-
-                        # Process market
-                        if order['order_type']==0:
-                            # Check market order valid
-                            open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, order_sidx, true_bid, true_ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
-
-                            # Calculate slippage
-                            slippage = slippages[order_sidx] if side else -slippages[order_sidx]
-                            open_price = open_price * (1 + slippage)
-
-                            # Update info
-                            order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
-
-                            # Update position
-                            order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, true_ask, true_bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
-
-                            # oco cancel
-                            if order['oco_cancel_ids']:
-                                order_oco_cancel_ids = order['oco_cancel_ids']
-
-                                # Remove from pending_order and add to orders_info_list
-                                for sidx in n_symbols_range:
-                                    symbol_orders = pending_orders[sidx]
-                                    cancel_orders = [{**porder, 'exec_date': cur_date_int, 'cancel': 1} \
-                                                      for porder in symbol_orders if porder['order_id'] in order_oco_cancel_ids]
-                                    orders_info_list.extend(cancel_orders)
-                                    pending_orders[sidx] = [porder for porder in symbol_orders if porder['order_id'] not in order_oco_cancel_ids]
-
-                            # oco add
-                            if order['oco_orders']:
-                                add_orders = order['oco_orders']
-                                add_orders = [{**default_order, **aorder} for aorder in add_orders]
-                                new_orders.extend(add_orders)
-
-                            # Finally, append to order_info_list
-                            orders_info_list.append(order)
-
-                        # Process limit & trigger
-                        else:
-                            # Check pending order valid
-                            side = check_pending_order_valid(agent_name, has_base_limit, cur_positions, pending_orders[order_sidx], order, order_sidx, true_bid, true_ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
-
-                            # Update info
-                            order.update({'pending_date': cur_date_int, 'valid': 1, 'side': side})
-
-                            # append to pending_orders
-                            pending_orders[order_sidx].append(order)
-                    else:
-                        order['pending_date'] = cur_date_int
-                        pending_orders[order_sidx].append(order)
+                # Append to order_info_list
+                orders_info_list.append(order)
+            
+            # Clear pending orders for this symbol
+            pending_orders[cur_sidx] = []
 
         # wfa Update paras
         if has_wfa:
@@ -796,130 +504,71 @@ def c_backtest_mea_core(dict agent_dict, int print_progress=0):
         # agent on_tick action
         new_orders, cancel_order_ids = agent.on_tick(cur_sidx, cur_date_int, bid, ask, kidx_tracker.kidx_sets_out, kidx_tracker.kidx_changed_flags, pending_orders, cur_positions, cur_balance)
 
-        # Cancel order from pending_orders
+        # Cancel orders from pending_orders
         for sidx in n_symbols_range:
             symbol_orders = pending_orders[sidx]
-            cancel_orders = [{**porder, 'exec_date': cur_date_int, 'cancel': 1} \
-                              for porder in symbol_orders if porder['order_id'] in cancel_order_ids]
-            orders_info_list.extend(cancel_orders)
+            cancel_orders = [porder for porder in symbol_orders if porder['order_id'] in cancel_order_ids]
+            for cancel_order in cancel_orders:
+                cancel_order['cancel'] = 1
+                cancel_order['exec_date'] = cur_date_int
+                orders_info_list.append(cancel_order)
             pending_orders[sidx] = [porder for porder in symbol_orders if porder['order_id'] not in cancel_order_ids]
 
-        # New orders processing, reprocessing when it gets oco add orders
+        # Process new orders (only market orders now)
         new_orders = [{**default_order, **norder} for norder in new_orders]
-        new_orders.sort(key=lambda x: x['order_type'])  # Sort to prioritize market orders first
-        while new_orders:
-            order = new_orders.pop(0)
+        for order in new_orders:
+            order_sidx = order['symbol_idx']
+            
+            # If order is for current symbol, execute immediately
+            if order_sidx == cur_sidx:
+                # Check market order valid
+                open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, order_sidx, bid, ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
 
-            if order['symbol_idx']==cur_sidx:
-                # Process market
-                if order['order_type']==0:
+                # Calculate slippage
+                slippage = slippages[order_sidx] if side else -slippages[order_sidx]
+                open_price = open_price * (1 + slippage)
+
+                # Update info
+                order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
+
+                # Update position
+                order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
+
+                # Append to order_info_list
+                orders_info_list.append(order)
+            
+            # If order is for different symbol
+            else:
+                # If that symbol has appeared in this tick cycle, execute with its last price
+                if cur_date_int == date_ints[order_sidx]:
+                    true_bid = bids[order_sidx]
+                    true_ask = asks[order_sidx]
+                    
                     # Check market order valid
-                    open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, cur_sidx, bid, ask, min_quotes[cur_sidx], min_bases[cur_sidx], base_steps[cur_sidx], cur_date_int)
+                    open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, order_sidx, true_bid, true_ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
 
                     # Calculate slippage
-                    slippage = slippages[cur_sidx] if side else -slippages[cur_sidx]
+                    slippage = slippages[order_sidx] if side else -slippages[order_sidx]
                     open_price = open_price * (1 + slippage)
 
                     # Update info
                     order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
 
                     # Update position
-                    order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, ask, bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
+                    order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, true_ask, true_bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
 
-                    # oco cancel
-                    if order['oco_cancel_ids']:
-                        order_oco_cancel_ids = order['oco_cancel_ids']
-
-                        # Remove from pending_order and add to orders_info_list
-                        for sidx in n_symbols_range:
-                            symbol_orders = pending_orders[sidx]
-                            cancel_orders = [{**porder, 'exec_date': cur_date_int, 'cancel': 1} \
-                                              for porder in symbol_orders if porder['order_id'] in order_oco_cancel_ids]
-                            orders_info_list.extend(cancel_orders)
-                            pending_orders[sidx] = [porder for porder in symbol_orders if porder['order_id'] not in order_oco_cancel_ids]
-
-                    # oco add
-                    if order['oco_orders']:
-                        add_orders = order['oco_orders']
-                        add_orders = [{**default_order, **aorder} for aorder in add_orders]
-                        new_orders.extend(add_orders)
-
-                    # Finally, append to order_info_list
+                    # Append to order_info_list
                     orders_info_list.append(order)
-
-                # Process limit & trigger
+                
+                # Otherwise, add to pending orders to execute when that symbol's tick arrives
                 else:
-                    # Check pending order valid
-                    side = check_pending_order_valid(agent_name, has_base_limit, cur_positions, pending_orders[cur_sidx], order, cur_sidx, bid, ask, min_quotes[cur_sidx], min_bases[cur_sidx], base_steps[cur_sidx], cur_date_int)
-
-                    # Update info
-                    order.update({'pending_date': cur_date_int, 'valid': 1, 'side': side})
-
-                    # append to pending_orders
-                    pending_orders[cur_sidx].append(order)
-
-            # For different symbol order, if previous date = cur_date_int, than open or pend with valid=1
-            # Else add to pending_orders with valid=0
-            else:
-                order_sidx = order['symbol_idx']
-                if cur_date_int==date_ints[order_sidx]:
-                    # Get info
-                    true_bid = bids[order_sidx]
-                    true_ask = asks[order_sidx]
-
-                    # Process market
-                    if order['order_type']==0:
-                        # Check market order valid
-                        open_price, side = check_market_order_valid(agent_name, has_base_limit, cur_positions, order, order_sidx, true_bid, true_ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
-
-                        # Calculate slippage
-                        slippage = slippages[order_sidx] if side else -slippages[order_sidx]
-                        open_price = open_price * (1 + slippage)
-
-                        # Update info
-                        order.update({'pending_date': cur_date_int, 'exec_price': open_price, 'exec_date': cur_date_int})
-
-                        # Update position
-                        order, cur_positions, position_cnt, cur_base_balance, mea_exurs_list, mea_dates_list = cur_positions_change(agent_name, order, cur_positions, position_cnt, symbols_info, cur_base_balance, true_ask, true_bid, slippage, cur_date_int, mea_exurs_list, mea_dates_list, kidx_sets, atr_df, datr_df, atr_tf_idx, datr_tf_idx)
-
-                        # oco cancel
-                        if order['oco_cancel_ids']:
-                            order_oco_cancel_ids = order['oco_cancel_ids']
-
-                            for sidx in n_symbols_range:
-                                symbol_orders = pending_orders[sidx]
-                                cancel_orders = [{**porder, 'exec_date': cur_date_int, 'cancel': 1} \
-                                                  for porder in symbol_orders if porder['order_id'] in order_oco_cancel_ids]
-                                orders_info_list.extend(cancel_orders)
-                                pending_orders[sidx] = [porder for porder in symbol_orders if porder['order_id'] not in order_oco_cancel_ids]
-
-                        # oco add
-                        if order['oco_orders']:
-                            add_orders = order['oco_orders']
-                            add_orders = [{**default_order, **aorder} for aorder in add_orders]
-                            new_orders.extend(add_orders)
-    
-                        # Finally, append to order_info_list
-                        orders_info_list.append(order)
-
-                    # Process limit & trigger
-                    else:
-                        # Check pending order valid
-                        side = check_pending_order_valid(agent_name, has_base_limit, cur_positions, pending_orders[order_sidx], order, order_sidx, true_bid, true_ask, min_quotes[order_sidx], min_bases[order_sidx], base_steps[order_sidx], cur_date_int)
-
-                        # Update info
-                        order.update({'pending_date': cur_date_int, 'valid': 1, 'side': side})
-
-                        # append to pending_orders
-                        pending_orders[order_sidx].append(order)
-                else:
-                    # For other symbol that cur_date is old, add to pending_orders with valid=0 and no pending_date
+                    order['pending_date'] = cur_date_int
                     pending_orders[order_sidx].append(order)
 
     ### handle orders_info
     orders_info = pd.DataFrame(orders_info_list,
-                               columns=['position_cnt', 'symbol_idx', 'position_id', 'order_id', 'order_type', 'base', 'price', 'tag',
-                                        'invalid', 'cancel', 'pending_date', 'exec_price', 'exec_date', 'exec_base', 'trade_fee',
+                               columns=['position_cnt', 'symbol_idx', 'position_id', 'order_id', 'base', 'tag', 'invalid', 'cancel',
+                                        'pending_date', 'exec_price', 'exec_date', 'exec_base', 'trade_fee',
                                         'spread_fee', 'slippage_fee', 'swap_fee', 'pnl', 'mfe', 'mae',
                                         'mea_mfe_price', 'mea_bmfe_price', 'mea_cmfe_price', 'mea_mae_price', 'mea_pnl_price', 'mea_mhl_price',  # MEA
                                         'mea_mfe_per', 'mea_bmfe_per', 'mea_cmfe_per', 'mea_mae_per', 'mea_pnl_per', 'mea_mhl_per',  # MEA
