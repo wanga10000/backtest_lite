@@ -11,6 +11,7 @@
 - **多進程並行**: 支援多核心並行處理，適合大規模參數測試
 - **支援Tick-based Or K-based模式**
 - **完整的手續費計算**: 支援多種手續費模式（點差、固定百分比、固定數量、隔夜費用等）
+- **市價單執行**: lite版本僅支援市價單，所有訂單立即執行
 
 ### 2. 策略框架
 - **模組化設計**: 基於`function_base`類的統一策略接口
@@ -276,12 +277,12 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
     # bid, ask: 當前買賣價
     # kidx_sets: 各品種各時間框架的K線索引
     # kidx_changed_flags: 各時間框架是否更新
-    # pending_orders: 待執行訂單
+    # pending_orders: 空列表
     # cur_positions: 當前持倉 ({pos_id: base})
     # cur_balance: 當前餘額
     
-    new_orders = []        # 新訂單列表
-    cancel_order_ids = []  # 要取消的訂單ID列表
+    new_orders = []        # 新訂單列表（僅市價單）
+    cancel_order_ids = []  # 已棄用
     
     # 策略邏輯實現
     # ...
@@ -289,45 +290,41 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
     return new_orders, cancel_order_ids
 ```
 
-#### 2.3 訂單格式
+#### 2.3 訂單格式（lite版本 簡化版）
 
-**基本訂單格式**：
+**基本訂單格式**（僅支援市價單）：
 ```python
 {
     'symbol_idx': 0,           # 品種索引（0=第一個品種，1=第二個品種等）     (default: 0)
     'position_id': 0,          # 倉位ID（0=預設，如網格策略需指定不同ID）     (default: 0)
-    'order_id': 0,             # 訂單ID（用於OCO cancel功能）             (default: 0)
-    'order_type': 0,           # 訂單類型（0=市價單，1=限價單，2=觸發單）    (default: 0)
     'base': 1.5,               # 倉位大小（正數=做多，負數=做空，0=平倉）     (default: 0)
-    'price': 50000,            # 觸發價格（限價單和觸發單需要）              (default: 0)
-    'oco_orders': [],          # OCO觸發時要添加的訂單列表                  (default: [])
-    'oco_cancel_ids': [],      # OCO觸發時要取消的訂單ID列表                (default: [])
     'tag': 'open'              # 自訂標籤，可用於記錄訂單來源或用途           (default: '')
 }
 ```
+
+**注意事項**：
+- lite 版本已移除限價單、觸發單和OCO機制
+- 所有訂單都是市價單，會立即執行，或pend到該市場open
+- `cancel_order_ids` 返回值已無作用
 
 **開倉訂單範例**：
 ```python
 # 市價開多倉（使用預設position_id=0）
 {
     'base': 0.1,               # 買入0.1個BTC
-    'order_type': 0            # 市價單
 }
 
-# 限價開空倉（指定position_id）
+# 市價開空倉（指定position_id）
 {
     'position_id': 1,          # 使用倉位ID=1
-    'order_type': 1,           # 限價單
     'base': -0.05,             # 賣出0.05個BTC
-    'price': 52000             # 在漲破52000價格觸發，因為做空limit單，price需比當前bid高，否則會變成market單
 }
 
-# 觸發單開倉
+# 帶標籤的市價開倉
 {
     'position_id': 2,
-    'order_type': 2,           # 觸發單
-    'base': 0.2,
-    'price': 48000             # 價格漲破48000時觸發，因為做多Trigger單，price需比當前ask高，否則會變成market單
+    'base': 0.2,               # 買入0.2個BTC
+    'tag': 'breakout_entry'    # 自訂標籤
 }
 ```
 
@@ -340,58 +337,40 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
 }
 ```
 
-**OCO訂單範例**（止損止盈）：
+**多倉位管理範例**：
 ```python
-# 開倉同時設置止損止盈
-main_order = {
-    'position_id': 0,
-    'order_type': 0,           # 市價開倉
-    'base': 0.1
-}
+# 使用不同的position_id來管理多個倉位
+for i in range(5):
+    # 每個倉位使用不同的position_id
+    order = {
+        'position_id': i,      # 倉位ID
+        'base': 0.01,          # 買入0.01個BTC
+        'tag': f'grid_{i}'     # 網格標籤
+    }
+    new_orders.append(order)
 
-# 止損單
-stoploss_order = {
-    'position_id': 0,
-    'order_type': 2,           # 觸發單
-    'price': 45000,            # 止損價格
-    'order_id': 1,             # 止損單ID
-    'oco_cancel_ids': [2]      # 觸發時取消止盈單
+# 平倉特定倉位
+close_order = {
+    'position_id': 2,          # 平倉ID=2的倉位
+    'base': 0,                 # base=0表示平倉
+    'tag': 'grid_close'
 }
-
-# 止盈單
-profit_order = {
-    'position_id': 0,
-    'order_type': 1,           # 限價單
-    'price': 55000,            # 止盈價格
-    'order_id': 2,             # 止盈單ID
-    'oco_cancel_ids': [1]      # 觸發時取消止損單
-}
-
-# 將止損止盈單加入開倉單的OCO
-main_order['oco_orders'] = [stoploss_order, profit_order]
 ```
 
-**網格策略範例**：
+**注意**：lite版本不支援止損止盈掛單，需在策略邏輯中使用市價單實現：
 ```python
-# 網格策略使用不同的position_id來管理多個倉位
-grid_levels = [50000, 51000, 52000, 53000, 54000]
-
-for i, level in enumerate(grid_levels):
-    # 每個網格層級使用不同的position_id
-    grid_order = {
-        'position_id': i,      # 網格層級ID
-        'order_type': 1,        # 限價單
-        'base': 0.01,           # 每個網格買入0.01個BTC
-        'price': level,         # 網格價格
-        'order_id': i * 2,      # 開倉單ID
-        'oco_orders': [{
-            'position_id': i,
-            'order_type': 1,
-            'base': 0,          # 平倉
-            'price': level + 1000,  # 獲利1000時平倉
-            'order_id': i * 2 + 1  # 平倉單ID
-        }]
-    }
+# 在on_tick中檢查止損止盈條件
+if cur_positions:
+    for pos_id, pos_info in cur_positions.items():
+        float_pnl = pos_info['float_pnl']
+        
+        # 檢查止損
+        if float_pnl < -100:
+            new_orders.append({'position_id': pos_id, 'base': 0, 'tag': 'stop_loss'})
+        
+        # 檢查止盈
+        elif float_pnl > 200:
+            new_orders.append({'position_id': pos_id, 'base': 0, 'tag': 'take_profit'})
 ```
 
 #### 2.4 Base概念詳解
@@ -417,24 +396,7 @@ if base < MIN_BASE:  # 檢查最小交易量
 base = base * -1  # 恢復負號（做空）
 ```
 
-#### 2.5 OCO機制詳解
-
-**OCO（One Cancels Other）觸發時機**：
-1. 當主訂單被觸發時，會執行OCO機制
-2. 先執行 `oco_cancel_ids` 中指定的訂單取消
-3. 再將 `oco_orders` 中的訂單加入pending列表
-
-**OCO使用場景**：
-- **止損止盈**：開倉時同時設置止損和止盈單
-- **網格交易**：開倉時設置對應的平倉單
-- **條件單**：觸發單執行時設置後續動作
-
-**OCO訂單格式要求**：
-- `oco_orders` 中的訂單就是正常訂單格式，用List of order_dict表示
-- `oco_cancel_ids` 中的ID必須對應現有訂單的 `order_id`，用List of order_id表示
-- OCO訂單最好不要包含OCO機制（避免太過複雜，無限遞歸）
-
-#### 2.6 倉位管理範例 (可由function agent內自行設計)
+#### 2.5 倉位管理範例 (可由function agent內自行設計)
 三種倉位模式示範：
 
 1. **固定金額模式** (`POS_MODE=0`):
@@ -456,7 +418,7 @@ base = base * -1  # 恢復負號（做空）
    base = quote / open_price
    ```
 
-#### 2.7 多時間框架使用
+#### 2.6 多時間框架使用
 ```python
 def declare_df(self):
     df_set = self.df_sets[0]  # 第一個品種
@@ -480,12 +442,7 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
 ### 3. 參考範例
 
 建議參考以下現有策略來學習實現方式：
-- `function/test_market.py`: 最簡單的策略範例，純買入賣出
-- `function/test_limit.py`: 最簡單的策略範例，可學習OCO order造止盈止損單的使用方法
-- `function/bband.py`: 布林帶策略，純買入賣出
-- `function/all_grid.py`: 複雜的網格策略
-- `function/fox_orb.py`: 開盤突破策略，可學習含狀態基控制的策略範例
-- `function/paxg_gold.py`: 雙品種配對交易策略，示範ms_sync使用方法
+- `function/test_market.py`: 最簡單的策略範例，純市價單買入賣出
 
 每個策略都展示了不同的實現模式和最佳實踐。
 
@@ -500,11 +457,15 @@ def on_tick(self, cur_sidx, cur_date_int, bid, ask, kidx_sets, kidx_changed_flag
 - When changing new method, don't need to record how the old method implemented, only need to record what the new method should do.
 
 ## Version History
-- v1.0.0: Initial release of the backtesting system with core functionalities.
-- v1.1.0: 
-  - Remove check_base_valid & check_price_valid, change to check_market_order_valid & check_pending_order_valid
-  - Change Raise Style
-  - No more invalid now, just raise error
-  - new_orders first process market order
+- v1.0.0:
+  - Initial release of the lite version of the backtesting system
+  - Remove limit/trigger order functionality
+  - Remove pending orders system completely
+  - Remove OCO (One Cancels Other) mechanism
+  - Simplify to market orders only (all orders execute immediately)
+  - Remove fields: order_id, order_type, price, oco_orders, oco_cancel_ids, invalid, valid, cancel, side
+  - Remove functions: check_pending_order_valid(), check_pending_order_touched()
+  - Remove MAKER_FEE (all orders use TAKER_FEE now)
+  - Improved performance and memory usage
   
 ## TODO
